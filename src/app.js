@@ -1,26 +1,37 @@
-const dotenv = require("dotenv");
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const express = require("express");
 const mongoose = require("mongoose");
+const cors = require("cors"); // ✅ CORS imported
 const { isAddress } = require("ethers");
 const { connectQueue, getChannel, queueName } = require("../utils/queue");
 const redisClient = require("../config/redisClient");
 
-dotenv.config();
 const app = express();
+
+// ✅ CORS middleware to allow frontend access
+app.use(cors({
+  origin: "*", 
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS" ,"PATCH"],
+  credentials: true
+}));
+
 app.use(express.json());
 
-// MongoDB Connection
+// ✅ MongoDB Connection
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Mongo connected"))
   .catch((err) => console.error("❌ Mongo connection failed:", err));
 
-// RabbitMQ Initialization
+// ✅ RabbitMQ Initialization
 connectQueue();
 
 app.post("/api/fund-transfer", async (req, res) => {
+  console.log(req.body);
   const { to, amount } = req.body;
+  console.log("gellll");
 
-  // Input Validation
+  // ✅ Input Validation
   if (!to || amount === undefined) {
     return res.status(400).json({ error: "Request body must contain 'to' and 'amount'." });
   }
@@ -38,52 +49,35 @@ app.post("/api/fund-transfer", async (req, res) => {
     return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
   }
 
-  const ip = req.headers["x-forwarded-for"] || req.ip;
-  const ipKey = `ip:${ip}`;
-  const walletKey = `wallet:${to}`;
-
   try {
-    const [ipLimit, walletLimit] = await Promise.all([
-      redisClient.get(ipKey),
-      redisClient.get(walletKey)
-    ]);
-
-    if (ipLimit || walletLimit) {
-      return res.status(429).json({ error: "Rate limit exceeded. Try after 24h." });
-    }
-
     const channel = getChannel();
     if (!channel) {
       return res.status(503).json({ error: "Service temporarily unavailable. Please try again later." });
     }
 
-    // Send to queue
+    // ✅ Send to RabbitMQ queue
     channel.sendToQueue(
       queueName,
       Buffer.from(JSON.stringify({ to, amount })),
       { persistent: true }
     );
 
-    // Atomic rate limit keys
-    await redisClient
-      .multi()
-      .set(ipKey, "1", { EX: 86400 })        // 24h in seconds
-      .set(walletKey, "1", { EX: 86400 })
-      .exec();
-
-    res.json({ success: true, message: "Transfer queued." });
+    res.json({
+      success: true,
+      message: "Your request has been queued. Please wait a few moments while we process your transaction."
+    });
   } catch (err) {
     console.error("❌ Error during fund transfer:", err);
     res.status(500).json({ error: "Internal server error." });
   }
 });
 
-// Start server
+// ✅ Start server
 const server = app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log(`🚀 API listening on port ${process.env.PORT}`);
 });
 
-// Graceful shutdown
+// ✅ Graceful shutdown
 const gracefulShutdown = async () => {
   console.log("🛑 Received shutdown signal, closing connections...");
   server.close(async (err) => {

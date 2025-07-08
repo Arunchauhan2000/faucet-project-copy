@@ -28,12 +28,9 @@ async function connectQueue() {
 
     channel = await connection.createChannel();
 
-    // 1. Dead-letter exchange (DLX) और queue (DLQ) सेट अप करें
     await channel.assertExchange(dlxName, 'direct', { durable: true });
     await channel.assertQueue(dlqName, { durable: true });
-    await channel.bindQueue(dlqName, dlxName, ''); // सभी मैसेज के लिए बाइंड करें
-
-    // 2. मुख्य क्यू को DLX से लिंक करें
+    await channel.bindQueue(dlqName, dlxName, ''); 
     await channel.assertQueue(mainQueue, {
       durable: true,
       arguments: { 'x-dead-letter-exchange': dlxName }

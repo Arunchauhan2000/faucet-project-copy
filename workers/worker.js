@@ -1,90 +1,131 @@
 const { ethers } = require("ethers");
+const Key = require('../models/key');
+const Wallet = require('../db/Wallet');
 const { connectQueue, getChannel, queueName } = require("../utils/queue");
 const mongoose = require("mongoose");
-const { decryptText } = require("../utils/kmsUtils");
-require("dotenv").config();
+const { decryptMnemonic, encryptMnemonic } = require("../utils/kmsUtils");
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
+
+const NUM_WORKERS = 5;
+console.log("ℹ️ RPC URL and KMS key ID loaded.");
 
 const startWorker = async () => {
-  await connectQueue();
-  const channel = getChannel();
-  if (!channel) {
-    console.log("RabbitMQ channel not ready, retrying in 5 seconds...");
-    setTimeout(startWorker, 5000);
-    return;
-  }
-
-  let faucetPrivateKey;
+  let channel;
   try {
-    // Retrieve the encrypted private key from environment variables
-    console.log(process.env.FAUCET_PRIVATE_KEY);
-    
-    const encryptedPrivateKey = process.env.FAUCET_PRIVATE_KEY;
-    if (!encryptedPrivateKey) throw new Error("FAUCET_PRIVATE_KEY environment variable is not set.");
-    faucetPrivateKey = await decryptText(encryptedPrivateKey);
-    console.log("✅ Faucet private key decrypted from KMS.");
+    // 2. Database aur RabbitMQ connection ko behtar banaya
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log("✅ Mongo connected");
+
+    await connectQueue();
+    channel = getChannel();
+    if (!channel) {
+      console.log("⚠️ RabbitMQ channel not ready, retrying in 5 seconds...");
+      setTimeout(startWorker, 5000);
+      return;
+    }
   } catch (err) {
-    console.error("❌ Failed to decrypt faucet private key from KMS:", err.message);
-    process.exit(1); // Exit if we can't get the private key
+    console.error("❌ Initial setup failed (Mongo or RabbitMQ):", err);
+    process.exit(1);
   }
 
-  // Provider and Signer can be created once and reused
-  const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-  const signer = new ethers.Wallet(faucetPrivateKey, provider);
+  const workers = [];
 
-  console.log("🚀 Faucet worker running and listening to queue...");
+  for (let i = 1; i <= NUM_WORKERS; i++) {
+    const envKey = `FAUCET_PRIVATE_KEY_${i}`;
+    const privateKeyFromEnv = process.env[envKey]; // 3. Variable ka naam saaf kiya
 
-  // Mongo connection
-  mongoose.connect(process.env.MONGO_URI).then(() => console.log("Mongo connected")).catch(err => {
-    console.error("Mongo connection failed:", err);
-  });
+    if (!privateKeyFromEnv) {
+      console.warn(`⚠️ Missing environment variable ${envKey}, skipping worker ${i}`);
+      continue;
+    }
 
-  channel.prefetch(1);
+    try {
+      // .env se aayi key ko encrypt kiya
+      const encryptedKeyForDB = await encryptMnemonic(privateKeyFromEnv);
+
+      // 4. Sahi model (Key) aur method (findOneAndUpdate) ka istemal karke 'keys' collection mein save kiya
+      await Key.findOneAndUpdate(
+        { workerId: i },
+        { encryptedKey: encryptedKeyForDB },
+        { upsert: true, new: true }
+      );
+      console.log(`✅ Encrypted key saved to 'keys' collection for worker ${i}`);
+
+      // Worker ke liye key ko decrypt kiya
+      const decryptedKey = await decryptMnemonic(encryptedKeyForDB);
+      const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+      const signer = new ethers.Wallet(decryptedKey, provider);
+
+      // ✅ Save worker address for monitoring
+      await Wallet.findOneAndUpdate(
+        { workerId: i },
+        { address: signer.address, workerId: i },
+        { upsert: true, new: true }
+      );
+
+      workers.push({ id: i, signer });
+      console.log(`✅ Worker ${i} initialized`);
+    } catch (err) {
+      console.error(`❌ Worker ${i} initialization failed:`, err.message);
+    }
+  }
+
+  if (workers.length === 0) {
+    console.error("❌ No valid workers initialized. Exiting...");
+    process.exit(1);
+  }
+
+  channel.prefetch(workers.length);
+
+  let currentIndex = 0;
   channel.consume(queueName, async (msg) => {
     if (msg === null) return;
 
     const { to, amount } = JSON.parse(msg.content.toString());
+    const worker = workers[currentIndex];
+    currentIndex = (currentIndex + 1) % workers.length;
 
     try {
-      const tx = await signer.sendTransaction({
+      const tx = await worker.signer.sendTransaction({
         to,
         value: ethers.parseUnits(amount.toString(), 18),
       });
 
-      console.log(`✅ Sent ${amount} to ${to}: ${tx.hash}`);
+      console.log(`✅ [Worker ${worker.id}] Sent ${amount} to ${to}: ${tx.hash}`);
       channel.ack(msg);
     } catch (err) {
-      console.error(`❌ Transfer failed for address ${to}:`, err.shortMessage || err.message);
+      console.error(`❌ [Worker ${worker.id}] Transfer failed for ${to}:`, err.shortMessage || err.message);
       const errorMessage = (err.error?.message || err.message || "").toLowerCase();
 
-      // A) Retryable nonce/concurrency errors
       if (errorMessage.includes("nonce") || errorMessage.includes("replacement transaction underpriced")) {
-        console.log("ℹ️ Concurrency error detected. Re-queueing message for another attempt.");
+        console.log(`ℹ️ [Worker ${worker.id}] Concurrency error. Re-queuing...`);
         channel.nack(msg, false, true);
-      // B) Duplicate transaction that is already pending
       } else if (errorMessage.includes("already known") || errorMessage.includes("tx already in mempool")) {
-        console.log("ℹ️ Transaction was already submitted. Acknowledging message.");
+        console.log(`ℹ️ [Worker ${worker.id}] Duplicate transaction. Acknowledging.`);
         channel.ack(msg);
-      // C) Other, likely permanent errors (out of gas, revert, etc.)
       } else {
-        console.log("🛑 Unrecoverable error. Sending message to dead-letter queue.");
+        console.log(`🛑 [Worker ${worker.id}] Unrecoverable error. Sending to dead-letter queue.`);
         channel.nack(msg, false, false);
       }
     }
   }, { noAck: false });
+
+  console.log(`🚀 Faucet workers (${workers.length}) running and listening to queue...`);
 };
 
 const gracefulShutdown = async () => {
-  console.log('Received shutdown signal, closing worker connections...');
+  console.log('🛑 Received shutdown signal, closing connections...');
   try {
     const channel = getChannel();
     await Promise.all([
       mongoose.connection.close(false),
       channel ? channel.connection.close() : Promise.resolve(),
     ]);
-    console.log('All worker connections closed gracefully.');
+    console.log('✅ Shutdown complete.');
     process.exit(0);
   } catch (shutdownErr) {
-    console.error('Error during worker graceful shutdown:', shutdownErr);
+    console.error('❌ Shutdown error:', shutdownErr);
     process.exit(1);
   }
 };
