@@ -1,6 +1,7 @@
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const express = require("express");
+const axios = require("axios");
 const mongoose = require("mongoose");
 const cors = require("cors"); // ✅ CORS imported
 const { isAddress } = require("ethers");
@@ -25,6 +26,13 @@ mongoose.connect(process.env.MONGO_URI)
 
 // ✅ RabbitMQ Initialization
 connectQueue();
+
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI;
+const GUILD_ID = process.env.GUILD_ID;
+const URL = process.env.CONFIG_URL || "http://localhost:3000";
+
 
 app.post("/api/fund-transfer", async (req, res) => {
   console.log(req.body);
@@ -71,7 +79,54 @@ app.post("/api/fund-transfer", async (req, res) => {
     res.status(500).json({ error: "Internal server error." });
   }
 });
+app.get("/auth/discord/callback", async (req, res) => {
+  const code = req.query.code;
 
+  try {
+    const tokenRes = await axios.post(
+      "https://discord.com/api/oauth2/token",
+      new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI,
+        scope: "identify guilds",
+      }),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+
+    const { access_token } = tokenRes.data;
+
+    // Get user info
+    const userRes = await axios.get("https://discord.com/api/users/@me", {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+
+    const guildsRes = await axios.get(
+      "https://discord.com/api/users/@me/guilds",
+      {
+        headers: { Authorization: `Bearer ${access_token}` },
+      }
+    );
+
+    const isInGuild = guildsRes.data.some((guild) => guild.id === GUILD_ID);
+    console.log("guildsRes is in guild:", isInGuild);
+
+    if (isInGuild) {
+      res.redirect(
+        `${URL}/mrmintblockchain/faucet?verified=true&user=${userRes.data.username}`
+      );
+    } else {
+      res.redirect(`https://discord.gg/DejePhBV`);
+    }
+  } catch (err) {
+    console.error("OAuth Error", err?.response?.data || err.message || err);
+    res.redirect(
+      `${URL}/mrmintblockchain/faucet?error=oauth_failed`
+    );
+  }
+});
 // ✅ Start server
 const server = app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log(`🚀 API listening on port ${process.env.PORT}`);
