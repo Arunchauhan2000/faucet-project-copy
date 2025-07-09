@@ -31,7 +31,6 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
 const GUILD_ID = process.env.GUILD_ID;
-const URL = process.env.CONFIG_URL || "http://localhost:3000";
 
 
 app.post("/api/fund-transfer", async (req, res) => {
@@ -111,19 +110,19 @@ app.get("/auth/discord/callback", async (req, res) => {
     );
 
     const isInGuild = guildsRes.data.some((guild) => guild.id === GUILD_ID);
-    console.log("guildsRes is in guild:", isInGuild);
 
-    if (isInGuild) {
-      res.redirect(
-        `${URL}/mrmintblockchain/faucet?verified=true&user=${userRes.data.username}`
-      );
-    } else {
-      res.redirect(`https://discord.gg/DejePhBV`);
-    }
+ if (isInGuild) {
+  // Send verified=true back to frontend
+  res.redirect("https://testfaucet.anannta.online/faucet?verified=true");
+} else {
+  // Not in the guild yet
+  res.redirect("https://testfaucet.anannta.online/faucet?verified=false");
+}
+
   } catch (err) {
     console.error("OAuth Error", err?.response?.data || err.message || err);
     res.redirect(
-      `${URL}/mrmintblockchain/faucet?error=oauth_failed`
+      "https://testfaucet.anannta.online/faucet?error=oauth_failed"
     );
   }
 });
