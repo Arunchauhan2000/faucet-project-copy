@@ -113,16 +113,16 @@ app.get("/auth/discord/callback", async (req, res) => {
 
  if (isInGuild) {
   // Send verified=true back to frontend
-  res.redirect("https://testfaucet.anannta.online/faucet?verified=true");
+  res.redirect(`${process.env.CONFIG_URL}/faucet?verified=true`);
 } else {
   // Not in the guild yet
-  res.redirect("https://testfaucet.anannta.online/faucet?verified=false");
+  res.redirect(`${process.env.CONFIG_URL}/faucet?verified=false`);
 }
 
   } catch (err) {
     console.error("OAuth Error", err?.response?.data || err.message || err);
     res.redirect(
-      "https://testfaucet.anannta.online/faucet?error=oauth_failed"
+      `${process.env.CONFIG_URL}/faucet?error=oauth_failed`
     );
   }
 });
