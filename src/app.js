@@ -50,11 +50,11 @@ const rateLimitMiddleware = async (req, res, next) => {
     ]);
 
     if (ipExists) {
-      return res.status(429).json({ error: "⏳ You have already claimed faucet from this IP in the last 24 hours." });
+      return res.status(429).json({ error: "You have already claimed faucet from this IP in the last 24 hours." });
     }
 
     if (addressExists) {
-      return res.status(429).json({ error: "⏳ This address has already claimed faucet in the last 24 hours." });
+      return res.status(429).json({ error: "This address has already claimed faucet in the last 24 hours." });
     }
 
     // Allow request to proceed
@@ -64,11 +64,11 @@ const rateLimitMiddleware = async (req, res, next) => {
     redisClient.set(ipKey, "1", { EX: 86400 });
     redisClient.set(addressKey, "1", { EX: 86400 });
   } catch (err) {
-    console.error("❌ Rate limit error:", err);
+    console.error("Rate limit error:", err);
     res.status(500).json({ error: "Internal server error during rate limit check." });
   }
 };
-async function verifyCaptcha(token, remoteIp) {
+async function verifyCaptcha(token) {
   const secretKey = process.env.RECAPTCHA_SECRET_KEY;
 
   try {
@@ -79,7 +79,6 @@ async function verifyCaptcha(token, remoteIp) {
         params: {
           secret: secretKey,
           response: token,
-          remoteip: remoteIp, // optional
         },
       }
     );
@@ -90,15 +89,21 @@ async function verifyCaptcha(token, remoteIp) {
     return false;
   }
 }
-const captchaSuccess = await verifyCaptcha(captchaToken, remoteIp);
-if (!captchaSuccess) {
-  return res.status(400).json({ error: "Captcha verification failed." });
-}
+
 
 app.post("/api/fund-transfer", rateLimitMiddleware, async (req, res) => {
   console.log(req.body);
-  const { to, amount } = req.body;
+const { to, amount, captchaToken } = req.body;
 
+  if (!captchaToken) {
+    return res.status(400).json({ error: "Captcha token is missing." });
+  }
+
+  // ✅ Verify reCAPTCHA
+  const captchaValid = await verifyCaptcha(captchaToken);
+  if (!captchaValid) {
+    return res.status(400).json({ error: "Captcha verification failed." });
+  }
   // ✅ Input Validation
   if (!to || amount === undefined) {
     return res.status(400).json({ error: "Request body must contain 'to' and 'amount'." });
@@ -110,10 +115,6 @@ app.post("/api/fund-transfer", rateLimitMiddleware, async (req, res) => {
 
   if (typeof amount !== "number" || amount <= 0) {
     return res.status(400).json({ error: "'amount' must be a positive number." });
-  }
-  const captchaValid = await verifyCaptcha(captchaToken, remoteIp);
-  if (!captchaValid) {
-    return res.status(400).json({ error: "Captcha verification failed." });
   }
   const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
   if (amount > MAX_AMOUNT) {
