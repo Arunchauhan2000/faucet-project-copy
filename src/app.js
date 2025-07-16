@@ -93,7 +93,9 @@ async function verifyCaptcha(token) {
 
 app.post("/api/fund-transfer", rateLimitMiddleware, async (req, res) => {
   console.log(req.body);
-const { to, amount, captchaToken } = req.body;
+const { to, captchaToken } = req.body;
+const amount = 0.1; // 
+
 
   if (!captchaToken) {
     return res.status(400).json({ error: "Captcha token is missing." });
@@ -104,22 +106,22 @@ const { to, amount, captchaToken } = req.body;
   if (!captchaValid) {
     return res.status(400).json({ error: "Captcha verification failed." });
   }
-  // ✅ Input Validation
-  if (!to || amount === undefined) {
-    return res.status(400).json({ error: "Request body must contain 'to' and 'amount'." });
-  }
+  // // ✅ Input Validation
+  // if (!to || amount === undefined) {
+  //   return res.status(400).json({ error: "Request body must contain 'to' and 'amount'." });
+  // }
 
   if (!isAddress(to)) {
     return res.status(400).json({ error: "Invalid 'to' address provided." });
   }
 
-  if (typeof amount !== "number" || amount <= 0) {
-    return res.status(400).json({ error: "'amount' must be a positive number." });
-  }
-  const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
-  if (amount > MAX_AMOUNT) {
-    return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
-  }
+  // if (typeof amount !== "number" || amount <= 0) {
+  //   return res.status(400).json({ error: "'amount' must be a positive number." });
+  // }
+  // const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
+  // if (amount > MAX_AMOUNT) {
+  //   return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
+  // }
 
   try {
     const channel = getChannel();
