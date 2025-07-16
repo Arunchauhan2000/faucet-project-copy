@@ -63,13 +63,37 @@ const rateLimitMiddleware = async (req, res, next) => {
     // Set keys after request is processed
     redisClient.set(ipKey, "1", { EX: 86400 });
     redisClient.set(addressKey, "1", { EX: 86400 });
-
   } catch (err) {
     console.error("❌ Rate limit error:", err);
     res.status(500).json({ error: "Internal server error during rate limit check." });
   }
 };
+async function verifyCaptcha(token, remoteIp) {
+  const secretKey = process.env.RECAPTCHA_SECRET_KEY;
 
+  try {
+    const res = await axios.post(
+      "https://www.google.com/recaptcha/api/siteverify",
+      null,
+      {
+        params: {
+          secret: secretKey,
+          response: token,
+          remoteip: remoteIp, // optional
+        },
+      }
+    );
+
+    return res.data.success;
+  } catch (error) {
+    console.error("reCAPTCHA verification failed:", error.message);
+    return false;
+  }
+}
+const captchaSuccess = await verifyCaptcha(captchaToken, remoteIp);
+if (!captchaSuccess) {
+  return res.status(400).json({ error: "Captcha verification failed." });
+}
 
 app.post("/api/fund-transfer", rateLimitMiddleware, async (req, res) => {
   console.log(req.body);
@@ -87,7 +111,10 @@ app.post("/api/fund-transfer", rateLimitMiddleware, async (req, res) => {
   if (typeof amount !== "number" || amount <= 0) {
     return res.status(400).json({ error: "'amount' must be a positive number." });
   }
-
+  const captchaValid = await verifyCaptcha(captchaToken, remoteIp);
+  if (!captchaValid) {
+    return res.status(400).json({ error: "Captcha verification failed." });
+  }
   const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
   if (amount > MAX_AMOUNT) {
     return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
