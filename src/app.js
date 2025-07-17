@@ -11,21 +11,29 @@ const redisClient = require("../config/redisClient");
 const app = express();
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*"); // or your exact domain
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+  );
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+  );
   next();
 });
-app.use(cors({
-  origin: "*", 
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS" ,"PATCH"],
-  credentials: true
-}));
-
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 
 // ✅ MongoDB Connection
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Mongo connected"))
   .catch((err) => console.error("❌ Mongo connection failed:", err));
 
@@ -55,11 +63,21 @@ const rateLimitMiddleware = async (req, res, next) => {
     ]);
 
     if (ipExists) {
-      return res.status(200).json({ error: "You have already claimed faucet from this IP in the last 24 hours." });
+      return res
+        .status(200)
+        .json({
+          error:
+            "You have already claimed faucet from this IP in the last 24 hours.",
+        });
     }
 
     if (addressExists) {
-      return res.status(200).json({ error: "This address has already claimed faucet in the last 24 hours." });
+      return res
+        .status(200)
+        .json({
+          error:
+            "This address has already claimed faucet in the last 24 hours.",
+        });
     }
 
     // Allow request to proceed
@@ -70,86 +88,91 @@ const rateLimitMiddleware = async (req, res, next) => {
     redisClient.set(addressKey, "1", { EX: 86400 });
   } catch (err) {
     console.error("Rate limit error:", err);
-    res.status(500).json({ error: "Internal server error during rate limit check." });
+    res
+      .status(500)
+      .json({ error: "Internal server error during rate limit check." });
   }
 };
-async function verifyCaptcha(token) {
+const verifyCaptcha = async (req, res, next) => {
   const secretKey = process.env.RECAPTCHA_SECRET_KEY;
-
-  try {
-    const res = await axios.post(
-      "https://www.google.com/recaptcha/api/siteverify",
-      null,
-      {
-        params: {
-          secret: secretKey,
-          response: token,
-        },
-      }
-    );
-
-    return res.data.success;
-  } catch (error) {
-    console.error("reCAPTCHA verification failed:", error.message);
-    return false;
-  }
-}
-
-
-app.post("/api/fund-transfer", rateLimitMiddleware, async (req, res) => {
-  console.log(req.body);
-const { to, captchaToken } = req.body;
-const amount = 0.1; // 
-
+  const { to, captchaToken } = req.body;
 
   if (!captchaToken) {
     return res.status(400).json({ error: "Captcha token is missing." });
   }
 
   // ✅ Verify reCAPTCHA
-  const captchaValid = await verifyCaptcha(captchaToken);
-  if (!captchaValid) {
-    return res.status(400).json({ error: "Captcha verification failed." });
-  }
-  // // ✅ Input Validation
-  // if (!to || amount === undefined) {
-  //   return res.status(400).json({ error: "Request body must contain 'to' and 'amount'." });
-  // }
-
-  if (!isAddress(to)) {
-    return res.status(400).json({ error: "Invalid 'to' address provided." });
-  }
-
-  // if (typeof amount !== "number" || amount <= 0) {
-  //   return res.status(400).json({ error: "'amount' must be a positive number." });
-  // }
-  // const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
-  // if (amount > MAX_AMOUNT) {
-  //   return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
-  // }
 
   try {
-    const channel = getChannel();
-    if (!channel) {
-      return res.status(503).json({ error: "Service temporarily unavailable. Please try again later." });
+    const apiRes = await axios.post(
+      "https://www.google.com/recaptcha/api/siteverify",
+      null,
+      {
+        params: {
+          secret: secretKey,
+          response: captchaToken,
+        },
+      }
+    );
+    if (!apiRes.data.success) {
+      return res.status(400).json({ error: "Captcha verification failed." });
+    }
+    next();
+  } catch (error) {
+    return res.status(400).json({ error: `reCAPTCHA verification failed: ${error.message} `}); 
+  }
+};
+
+app.post(
+  "/api/fund-transfer",
+  verifyCaptcha,
+  rateLimitMiddleware,
+  async (req, res) => {
+    console.log(req.body);
+    const { to, captchaToken } = req.body;
+    const amount = 0.1; //
+
+
+    if (!isAddress(to)) {
+      return res.status(400).json({ error: "Invalid 'to' address provided." });
     }
 
-    // ✅ Send to RabbitMQ queue
-    channel.sendToQueue(
-      queueName,
-      Buffer.from(JSON.stringify({ to, amount })),
-      { persistent: true }
-    );
+    // if (typeof amount !== "number" || amount <= 0) {
+    //   return res.status(400).json({ error: "'amount' must be a positive number." });
+    // }
+    // const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
+    // if (amount > MAX_AMOUNT) {
+    //   return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
+    // }
 
-    res.json({
-      success: true,
-      message: "Your request has been queued. Please wait a few moments while we process your transaction."
-    });
-  } catch (err) {
-    console.error("❌ Error during fund transfer:", err);
-    res.status(500).json({ error: "Internal server error." });
+    try {
+      const channel = getChannel();
+      if (!channel) {
+        return res
+          .status(503)
+          .json({
+            error: "Service temporarily unavailable. Please try again later.",
+          });
+      }
+
+      // ✅ Send to RabbitMQ queue
+      channel.sendToQueue(
+        queueName,
+        Buffer.from(JSON.stringify({ to, amount })),
+        { persistent: true }
+      );
+
+      res.json({
+        success: true,
+        message:
+          "Your request has been queued. Please wait a few moments while we process your transaction.",
+      });
+    } catch (err) {
+      console.error("❌ Error during fund transfer:", err);
+      res.status(500).json({ error: "Internal server error." });
+    }
   }
-});
+);
 app.get("/auth/discord/callback", async (req, res) => {
   const code = req.query.code;
 
@@ -183,19 +206,16 @@ app.get("/auth/discord/callback", async (req, res) => {
 
     const isInGuild = guildsRes.data.some((guild) => guild.id === GUILD_ID);
 
- if (isInGuild) {
-  // Send verified=true back to frontend
-  res.redirect(`${process.env.CONFIG_URL}/faucet?verified=true`);
-} else {
-  // Not in the guild yet
-  res.redirect(`${process.env.CONFIG_URL}/faucet?verified=false`);
-}
-
+    if (isInGuild) {
+      // Send verified=true back to frontend
+      res.redirect(`${process.env.CONFIG_URL}/faucet?verified=true`);
+    } else {
+      // Not in the guild yet
+      res.redirect(`${process.env.CONFIG_URL}/faucet?verified=false`);
+    }
   } catch (err) {
     console.error("OAuth Error", err?.response?.data || err.message || err);
-    res.redirect(
-      `${process.env.CONFIG_URL}/faucet?error=oauth_failed`
-    );
+    res.redirect(`${process.env.CONFIG_URL}/faucet?error=oauth_failed`);
   }
 });
 // ✅ Start server
@@ -230,4 +250,3 @@ const gracefulShutdown = async () => {
 
 process.on("SIGINT", gracefulShutdown);
 process.on("SIGTERM", gracefulShutdown);
-
