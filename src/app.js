@@ -9,18 +9,18 @@ const { connectQueue, getChannel, queueName } = require("../utils/queue");
 const redisClient = require("../config/redisClient");
 
 const app = express();
-
-app.use(cors({
-  origin: "*", 
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS" ,"PATCH"],
-  credentials: true
-}));
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*"); // or your exact domain
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
   next();
 });
+app.use(cors({
+  origin: "*", 
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS" ,"PATCH"],
+  credentials: true
+}));
+
 
 app.use(express.json());
 
@@ -55,11 +55,11 @@ const rateLimitMiddleware = async (req, res, next) => {
     ]);
 
     if (ipExists) {
-      return res.status(429).json({ error: "You have already claimed faucet from this IP in the last 24 hours." });
+      return res.status(200).json({ error: "You have already claimed faucet from this IP in the last 24 hours." });
     }
 
     if (addressExists) {
-      return res.status(429).json({ error: "This address has already claimed faucet in the last 24 hours." });
+      return res.status(200).json({ error: "This address has already claimed faucet in the last 24 hours." });
     }
 
     // Allow request to proceed
