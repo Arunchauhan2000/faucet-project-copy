@@ -10,12 +10,17 @@ const redisClient = require("../config/redisClient");
 
 const app = express();
 
-// ✅ CORS middleware to allow frontend access
 app.use(cors({
   origin: "*", 
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS" ,"PATCH"],
   credentials: true
 }));
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*"); // or your exact domain
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  next();
+});
 
 app.use(express.json());
 
