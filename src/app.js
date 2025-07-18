@@ -9,12 +9,12 @@ const { connectQueue, getChannel, queueName } = require("../utils/queue");
 const redisClient = require("../config/redisClient");
 
 const app = express();
-
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   credentials: true
 }));
+
 
 app.use(express.json());
 
@@ -46,35 +46,68 @@ const rateLimitMiddleware = async (req, res, next) => {
     if (addressExists) {
       return res.status(429).json({ error: "⏳ This address has already claimed faucet in the last 1 minute." });
     }
-
+    
     next();
-  } catch (err) {
-    console.error("❌ Rate limit error:", err);
+    }
+   catch (err) {
+    console.error("Rate limit error:", err);
     res.status(500).json({ error: "Internal server error during rate limit check." });
-  }
+    }
 };
+async function verifyCaptcha(token) {
+  const secretKey = process.env.RECAPTCHA_SECRET_KEY;
+
+  try {
+    const res = await axios.post(
+      "https://www.google.com/recaptcha/api/siteverify",
+      null,
+      {
+        params: {
+          secret: secretKey,
+          response: token,
+        },
+      }
+    );
+
+    return res.data.success;
+  } catch (error) {
+    console.error("reCAPTCHA verification failed:", error.message);
+    return false;
+  }
+}
 
 // ✅ Fund Transfer Endpoint
 app.post("/api/fund-transfer", rateLimitMiddleware, async (req, res) => {
   console.log(req.body);
-  const { to, amount } = req.body;
+const { to, captchaToken } = req.body;
+const amount = 0.1; // 
 
-  if (!to || amount === undefined) {
-    return res.status(400).json({ error: "Request body must contain 'to' and 'amount'." });
+
+  if (!captchaToken) {
+    return res.status(400).json({ error: "Captcha token is missing." });
   }
+
+  // ✅ Verify reCAPTCHA
+  const captchaValid = await verifyCaptcha(captchaToken);
+  if (!captchaValid) {
+    return res.status(400).json({ error: "Captcha verification failed." });
+  }
+  // // ✅ Input Validation
+  // if (!to || amount === undefined) {
+  //   return res.status(400).json({ error: "Request body must contain 'to' and 'amount'." });
+  // }
 
   if (!isAddress(to)) {
     return res.status(400).json({ error: "Invalid 'to' address provided." });
   }
 
-  if (typeof amount !== "number" || amount <= 0) {
-    return res.status(400).json({ error: "'amount' must be a positive number." });
-  }
-
-  const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
-  if (amount > MAX_AMOUNT) {
-    return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
-  }
+  // if (typeof amount !== "number" || amount <= 0) {
+  //   return res.status(400).json({ error: "'amount' must be a positive number." });
+  // }
+  // const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
+  // if (amount > MAX_AMOUNT) {
+  //   return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
+  // }
 
   try {
     const channel = getChannel();
