@@ -84,8 +84,8 @@ const rateLimitMiddleware = async (req, res, next) => {
     next();
 
     // Set keys after request is processed
-    redisClient.set(ipKey, "1", { EX: 86400 });
-    redisClient.set(addressKey, "1", { EX: 86400 });
+    redisClient.set(ipKey, "1", { EX: 600 });
+    redisClient.set(addressKey, "1", { EX: 600 });
   } catch (err) {
     console.error("Rate limit error:", err);
     res
@@ -101,8 +101,6 @@ const verifyCaptcha = async (req, res, next) => {
     return res.status(400).json({ error: "Captcha token is missing." });
   }
 
-  // ✅ Verify reCAPTCHA
-
   try {
     const apiRes = await axios.post(
       "https://www.google.com/recaptcha/api/siteverify",
@@ -114,7 +112,7 @@ const verifyCaptcha = async (req, res, next) => {
         },
       }
     );
-    if (!apiRes.data.success) {
+    if (!apiRes.data.success) {      
       return res.status(400).json({ error: "Captcha verification failed." });
     }
     next();
@@ -137,13 +135,6 @@ app.post(
       return res.status(400).json({ error: "Invalid 'to' address provided." });
     }
 
-    // if (typeof amount !== "number" || amount <= 0) {
-    //   return res.status(400).json({ error: "'amount' must be a positive number." });
-    // }
-    // const MAX_AMOUNT = parseFloat(process.env.FAUCET_MAX_AMOUNT) || 0.1;
-    // if (amount > MAX_AMOUNT) {
-    //   return res.status(400).json({ error: `Amount exceeds the maximum limit of ${MAX_AMOUNT}.` });
-    // }
 
     try {
       const channel = getChannel();
