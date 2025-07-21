@@ -3,7 +3,7 @@ const Key = require('../models/key');
 const Wallet = require('../db/Wallet');
 const { connectQueue, getChannel, queueName } = require("../utils/queue");
 const mongoose = require("mongoose");
-const { decryptMnemonic, encryptMnemonic } = require("../utils/kmsUtils");
+const { decryptMnemonic } = require("../utils/kmsUtils");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 
@@ -13,7 +13,6 @@ console.log("ℹ️ RPC URL and KMS key ID loaded.");
 const startWorker = async () => {
   let channel;
   try {
-    // 2. Database aur RabbitMQ connection ko behtar banaya
     await mongoose.connect(process.env.MONGO_URI);
     console.log("✅ Mongo connected");
 
@@ -32,32 +31,17 @@ const startWorker = async () => {
   const workers = [];
 
   for (let i = 1; i <= NUM_WORKERS; i++) {
-    const envKey = `FAUCET_PRIVATE_KEY_${i}`;
-    const privateKeyFromEnv = process.env[envKey]; // 3. Variable ka naam saaf kiya
-
-    if (!privateKeyFromEnv) {
-      console.warn(`⚠️ Missing environment variable ${envKey}, skipping worker ${i}`);
-      continue;
-    }
-
     try {
-      // .env se aayi key ko encrypt kiya
-      const encryptedKeyForDB = await encryptMnemonic(privateKeyFromEnv);
+      const keyRecord = await Key.findOne({ workerId: i });
+      if (!keyRecord || !keyRecord.encryptedKey) {
+        console.warn(`⚠️ No encrypted key for worker ${i}, skipping`);
+        continue;
+      }
 
-      // 4. Sahi model (Key) aur method (findOneAndUpdate) ka istemal karke 'keys' collection mein save kiya
-      await Key.findOneAndUpdate(
-        { workerId: i },
-        { encryptedKey: encryptedKeyForDB },
-        { upsert: true, new: true }
-      );
-      console.log(`✅ Encrypted key saved to 'keys' collection for worker ${i}`);
-
-      // Worker ke liye key ko decrypt kiya
-      const decryptedKey = await decryptMnemonic(encryptedKeyForDB);
+      const decryptedKey = await decryptMnemonic(keyRecord.encryptedKey);
       const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
       const signer = new ethers.Wallet(decryptedKey, provider);
 
-      // ✅ Save worker address for monitoring
       await Wallet.findOneAndUpdate(
         { workerId: i },
         { address: signer.address, workerId: i },
@@ -65,7 +49,7 @@ const startWorker = async () => {
       );
 
       workers.push({ id: i, signer });
-      console.log(`✅ Worker ${i} initialized`);
+      console.log(`✅ Worker ${i} initialized with address ${signer.address}`);
     } catch (err) {
       console.error(`❌ Worker ${i} initialization failed:`, err.message);
     }
